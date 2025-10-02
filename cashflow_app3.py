@@ -1,204 +1,173 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import json
 
-st.set_page_config(page_title="Cashflow & Compound Growth App", layout="wide")
+# -----------------------------
+# Streamlit App Title
+# -----------------------------
+st.title("Cashflow & Compound Growth Model")
 
-# ----------------------
-# Core Calculation Logic
-# ----------------------
-def project_cashflow(
-    annual_income,
-    monthly_expenses,
-    current_balance,
-    monthly_contribution,
-    annual_growth_rate,
-    inflation_rate,
-    projection_years,
-    deposit_timing="Start",
-    show_real=True,
-):
-    """
-    Simulates monthly contributions and monthly compounding.
-    - deposit_timing: "Start" = contributions at beginning of month (annuity-due),
-                      "End"   = contributions at end of month (ordinary annuity)
-    - Inflation-adjusted results if show_real=True.
-    """
+# -----------------------------
+# Core Inputs (always visible)
+# -----------------------------
+st.header("Core Inputs")
 
-    monthly_rate = annual_growth_rate / 100.0 / 12.0
-    balance = float(current_balance)
-    cum_deposits = 0.0
-    cum_interest = 0.0
-    results = []
-    cumulative_inflation = 1.0
+initial_investment = st.number_input("Initial Investment (£)", min_value=0.0, value=0.0, step=100.0)
+monthly_income = st.number_input("Monthly Income (£)", min_value=0.0, value=0.0, step=100.0)
+monthly_expenses = st.number_input("Monthly Expenses (£)", min_value=0.0, value=0.0, step=100.0)
+annual_growth_rate = st.number_input("Annual Growth Rate (%)", min_value=0.0, value=6.0, step=0.1) / 100
 
-    for year in range(1, projection_years + 1):
-        year_deposits = 0.0
-        year_interest = 0.0
-        year_expenses = 0.0
+projection_years = st.number_input("Projection Period (years)", min_value=1, value=30, step=1)
 
-        for m in range(12):
-            # Contributions at start or end of month
-            if deposit_timing == "Start":
-                balance += monthly_contribution
-                year_deposits += monthly_contribution
-                cum_deposits += monthly_contribution
+# -----------------------------
+# Optional Toggles
+# -----------------------------
 
-            # Apply monthly interest
-            interest = balance * monthly_rate
-            balance += interest
-            year_interest += interest
-            cum_interest += interest
+# Contributions toggle
+use_contributions = st.checkbox("Add Monthly Contributions?")
+if use_contributions:
+    monthly_contribution = st.number_input("Monthly Contribution (£)", min_value=0.0, value=0.0, step=100.0)
+    contribution_timing = st.selectbox("Contribution Timing", ["Start of Month", "End of Month"])
+else:
+    monthly_contribution = 0.0
+    contribution_timing = "End of Month"
 
-            # Expenses (assumed monthly at month end)
-            balance -= monthly_expenses
-            year_expenses += monthly_expenses
+# Withdrawals toggle (multiple entries allowed)
+use_withdrawals = st.checkbox("Add Withdrawals?")
+withdrawals = []
+if use_withdrawals:
+    st.markdown("### Withdrawal Entries")
+    num_withdrawals = st.number_input("Number of Withdrawals", min_value=1, value=1, step=1)
 
-            if deposit_timing == "End":
-                balance += monthly_contribution
-                year_deposits += monthly_contribution
-                cum_deposits += monthly_contribution
+    for i in range(num_withdrawals):
+        st.markdown(f"**Withdrawal {i+1}**")
+        withdrawal_type = st.radio(f"Type (Withdrawal {i+1})", ["Monthly", "Lump Sum"], key=f"type_{i}")
+        withdrawal_amount = st.number_input(f"Amount (£) for Withdrawal {i+1}", min_value=0.0, value=0.0, step=100.0, key=f"amt_{i}")
+        withdrawal_start_year = st.number_input(f"Start Year for Withdrawal {i+1}", min_value=1, max_value=projection_years, value=5, key=f"year_{i}")
 
-        # End of year (nominal values)
-        end_nominal = balance
+        withdrawals.append({
+            "type": withdrawal_type,
+            "amount": withdrawal_amount,
+            "start_year": withdrawal_start_year
+        })
 
-        # Inflation adjustment
-        cumulative_inflation *= (1.0 + inflation_rate / 100.0)
-        if show_real:
-            factor = cumulative_inflation
-        else:
-            factor = 1.0
+# Inflation toggle
+use_inflation = st.checkbox("Include Inflation?")
+if use_inflation:
+    annual_inflation = st.number_input("Annual Inflation Rate (%)", min_value=0.0, value=2.0, step=0.1) / 100
+else:
+    annual_inflation = 0.0
 
-        results.append(
-            {
-                "Year": year,
-                "Deposits (cumulative)": round(cum_deposits / factor, 2),
-                "Interest (cumulative)": round(cum_interest / factor, 2),
-                "Expenses (year)": round(year_expenses / factor, 2),
-                "End Balance": round(end_nominal / factor, 2),
-            }
-        )
+# Income growth toggle
+use_income_growth = st.checkbox("Add Income Growth?")
+if use_income_growth:
+    income_growth_rate = st.number_input("Annual Income Growth Rate (%)", min_value=0.0, value=2.0, step=0.1) / 100
+else:
+    income_growth_rate = 0.0
 
-    return pd.DataFrame(results)
+# Expenses growth toggle
+use_expenses_growth = st.checkbox("Add Expenses Growth?")
+if use_expenses_growth:
+    expenses_growth_rate = st.number_input("Annual Expenses Growth Rate (%)", min_value=0.0, value=2.0, step=0.1) / 100
+else:
+    expenses_growth_rate = 0.0
 
+# -----------------------------
+# Calculation Logic
+# -----------------------------
 
-# ----------------------
-# Streamlit App
-# ----------------------
-st.title("💰 Cashflow & Compound Growth Model")
+months = projection_years * 12
+balance = initial_investment
+records = []
 
-with st.sidebar:
-    st.header("Inputs")
+monthly_growth_rate = (1 + annual_growth_rate) ** (1/12) - 1
+monthly_inflation_rate = (1 + annual_inflation) ** (1/12) - 1
 
-    current_balance = st.number_input("Current Balance (£)", min_value=0.0, value=0.0, step=100.0)
-    monthly_contribution = st.number_input("Monthly Contributions (£)", min_value=0.0, value=800.0, step=100.0)
-    monthly_expenses = st.number_input("Monthly Expenses (£)", min_value=0.0, value=0.0, step=50.0)
-    annual_income = st.number_input("Annual Income (£)", min_value=0.0, value=0.0, step=1000.0)
+for month in range(1, months + 1):
+    year = (month - 1) // 12 + 1
 
-    annual_growth_rate = st.number_input("Annual Growth Rate (%)", min_value=0.0, value=6.0, step=0.5)
-    inflation_rate = st.number_input("Inflation Rate (%)", min_value=0.0, value=2.0, step=0.5)
+    # Apply income and expenses (with growth)
+    income = monthly_income * ((1 + income_growth_rate) ** (year - 1))
+    expenses = monthly_expenses * ((1 + expenses_growth_rate) ** (year - 1))
 
-    projection_years = st.slider("Projection Years", 1, 50, 30)
+    net_flow = income - expenses
 
-    deposit_timing = st.selectbox(
-        "Deposit Timing",
-        options=["Start", "End"],
-        index=0,
-        help="Choose whether deposits are made at the start or end of the month."
-    )
+    # Apply contributions
+    if contribution_timing == "Start of Month":
+        balance += monthly_contribution
+    balance += net_flow
 
-    show_real = st.radio("Show Values:", ["Real (inflation-adjusted)", "Nominal"], index=0)
-    show_real_flag = True if show_real.startswith("Real") else False
+    # Apply withdrawals if conditions met
+    if use_withdrawals:
+        for w in withdrawals:
+            if year >= w["start_year"]:
+                if w["type"] == "Monthly":
+                    balance -= w["amount"]
+                elif w["type"] == "Lump Sum" and month == (w["start_year"] * 12):
+                    balance -= w["amount"]
 
-    # Save/Load functionality
-    st.subheader("💾 Save & Load")
-    if st.button("Save Inputs"):
-        inputs = {
-            "current_balance": current_balance,
-            "monthly_contribution": monthly_contribution,
-            "monthly_expenses": monthly_expenses,
-            "annual_income": annual_income,
-            "annual_growth_rate": annual_growth_rate,
-            "inflation_rate": inflation_rate,
-            "projection_years": projection_years,
-            "deposit_timing": deposit_timing,
-            "show_real": show_real_flag,
-        }
-        with open("inputs.json", "w") as f:
-            json.dump(inputs, f)
-        st.success("Inputs saved to inputs.json")
+    # Apply growth
+    balance *= (1 + monthly_growth_rate)
 
-    uploaded_file = st.file_uploader("Load Inputs", type="json")
-    if uploaded_file is not None:
-        loaded_inputs = json.load(uploaded_file)
-        st.session_state.update(loaded_inputs)
-        st.success("Inputs loaded! Please refresh to apply.")
+    # If contributions at end of month
+    if contribution_timing == "End of Month":
+        balance += monthly_contribution
 
+    # Record end of each year
+    if month % 12 == 0:
+        total_withdrawals = 0
+        if use_withdrawals:
+            for w in withdrawals:
+                if w["type"] == "Monthly" and year >= w["start_year"]:
+                    total_withdrawals += w["amount"] * 12
+                elif w["type"] == "Lump Sum" and year == w["start_year"]:
+                    total_withdrawals += w["amount"]
 
-# ----------------------
-# Run Projection
-# ----------------------
-df = project_cashflow(
-    annual_income,
-    monthly_expenses,
-    current_balance,
-    monthly_contribution,
-    annual_growth_rate,
-    inflation_rate,
-    projection_years,
-    deposit_timing,
-    show_real_flag,
-)
+        records.append({
+            "Year": year,
+            "Income": round(income * 12, 2),
+            "Expenses": round(expenses * 12, 2),
+            "Contributions": round(monthly_contribution * 12, 2) if use_contributions else 0,
+            "Withdrawals": round(total_withdrawals, 2),
+            "End Balance": round(balance, 2)
+        })
 
+# -----------------------------
+# Results Table
+# -----------------------------
+df = pd.DataFrame(records)
 st.subheader("Projection Table")
-st.dataframe(df, use_container_width=True)
+st.dataframe(df)
 
-# ----------------------
-# Plot Graph
-# ----------------------
+# -----------------------------
+# Chart
+# -----------------------------
 fig = go.Figure()
 
 fig.add_trace(go.Scatter(
-    x=df["Year"],
-    y=df["End Balance"],
-    mode="lines+markers",
-    name="End Balance",
-    line=dict(color="black", width=3)
+    x=df["Year"], y=df["End Balance"], mode="lines+markers", name="End Balance"
 ))
 
 fig.add_trace(go.Bar(
-    x=df["Year"],
-    y=df["Deposits (cumulative)"],
-    name="Deposits",
-    marker=dict(color="blue"),
-    opacity=0.6
+    x=df["Year"], y=df["Income"], name="Income"
 ))
-
 fig.add_trace(go.Bar(
-    x=df["Year"],
-    y=df["Interest (cumulative)"],
-    name="Growth (Interest)",
-    marker=dict(color="green"),
-    opacity=0.6
+    x=df["Year"], y=df["Expenses"], name="Expenses"
 ))
-
-fig.add_trace(go.Bar(
-    x=df["Year"],
-    y=df["Expenses (year)"],
-    name="Expenses",
-    marker=dict(color="red"),
-    opacity=0.6
-))
+if use_contributions:
+    fig.add_trace(go.Bar(
+        x=df["Year"], y=df["Contributions"], name="Contributions"
+    ))
+if use_withdrawals:
+    fig.add_trace(go.Bar(
+        x=df["Year"], y=df["Withdrawals"], name="Withdrawals"
+    ))
 
 fig.update_layout(
     barmode="stack",
     title="Cashflow Projection",
     xaxis_title="Year",
-    yaxis_title="Balance (£)",
-    legend_title="Components",
-    template="plotly_white",
-    height=600,
+    yaxis_title="£ Value"
 )
 
 st.plotly_chart(fig, use_container_width=True)
